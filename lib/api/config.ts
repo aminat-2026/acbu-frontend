@@ -1,7 +1,7 @@
 /**
  * Public backend config the frontend uses to discover what asset / network to
- * sign against. Kept in a tiny module of its own so callers can cache the
- * response: the assets don't change between requests within a session.
+ * sign against. Kept in a tiny module of its own so callers can share the
+ * response briefly without pinning stale backend config for a whole tab session.
  */
 import { get } from "./client";
 import type { RequestOptions } from "./client";
@@ -24,10 +24,14 @@ export interface PublicAssetsConfig {
     mint?: {
       network_fee_text?: string | null;
       fee_text?: string | null;
+      /** Fractional fee rate, e.g. 0.003 for 0.3%. */
+      fee_rate?: number | null;
     } | null;
     burn?: {
       processing_fee_text?: string | null;
       fee_text?: string | null;
+      /** Fractional fee rate, e.g. 0.003 for 0.3%. */
+      fee_rate?: number | null;
     } | null;
     transfer?: {
       network_fee_text?: string | null;
@@ -36,17 +40,25 @@ export interface PublicAssetsConfig {
   } | null;
 }
 
+const ASSETS_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
+
 let cached: PublicAssetsConfig | null = null;
+let cachedAt = 0;
 let inFlight: Promise<PublicAssetsConfig> | null = null;
 
-export async function getAssetsConfig(opts?: Pick<RequestOptions, 'signal'>): Promise<PublicAssetsConfig> {
-  if (cached) return cached;
+function isCacheFresh(): boolean {
+  return cached !== null && Date.now() - cachedAt < ASSETS_CONFIG_CACHE_TTL_MS;
+}
+
+export async function getAssetsConfig(opts?: Pick<RequestOptions, "signal">): Promise<PublicAssetsConfig> {
+  if (isCacheFresh()) return cached as PublicAssetsConfig;
   // If an in-flight request exists and no abort signal was provided, reuse it.
   // If a signal is provided, start a fresh request so the caller can abort it independently.
   if (inFlight && !opts?.signal) return inFlight;
   const promise = get<PublicAssetsConfig>("/config/assets", opts)
     .then((cfg) => {
       cached = cfg;
+      cachedAt = Date.now();
       return cfg;
     })
     .finally(() => {
@@ -58,5 +70,6 @@ export async function getAssetsConfig(opts?: Pick<RequestOptions, 'signal'>): Pr
 
 export function clearAssetsConfigCache(): void {
   cached = null;
+  cachedAt = 0;
   inFlight = null;
 }
